@@ -10,12 +10,12 @@ using the TCP/IP protocol stack and must support multi-direction data transferin
 
 ## **APPLICATION DESCRIPTION:**
 The application includes the two types of hosts: tracker and node.
-• A centralized tracker keeps track of multiple nodes and stores what pieces of files.
-• Through tracker protocol, a node informs the server as to what files are contained in its local
+- A centralized tracker keeps track of multiple nodes and stores what pieces of files.
+- Through tracker protocol, a node informs the server as to what files are contained in its local
 repository but does not actually transmit file data to the server.
-• When a node requires a file that does not belong to its repository, a request is sent to the
+- When a node requires a file that does not belong to its repository, a request is sent to the
 tracker.
-• MDDT: The client can download multiple files from multiple source nodes at once,
+- MDDT: The client can download multiple files from multiple source nodes at once,
 simultaneously.
  This requires the node code to be a multithreaded implementation.
 ## **How to Run:**
