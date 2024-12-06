@@ -39,7 +39,22 @@ Make sure you have Python 3.x installed on your system. You can check the Python
  python --version
 ```
 
-And install all the library that we have imported in the source code
+And install all the library that we have imported in the source code:
 ```bash
  pip install <library>
+```
+Besides that, we use some extensions to enhance convenience and make it easier to manage user information:
+```bash
+ sqlite3
+ vscode-pdf
+```
+
+#### Some command for the database you may need:
+```bash
+ sqlite3 tracker.db
+ .tables
+ PRAGMA table_info(users);
+ SELECT * FROM users;
+ DELETE * FROM users;
+ UPDATE sqlite_sequence SET seq = 0 WHERE name = 'users';
 ```
