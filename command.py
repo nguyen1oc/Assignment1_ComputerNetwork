@@ -13,12 +13,12 @@ DISCONNECT_MSG = '!DISCONNECT'
 #REGISTER
 REGISTER = 'register'
 REGISTER_FAILED = 'register_error'
-REGISTER_SUCCESSFUL = 'register_complete'
+REGISTER_SUCCESSFUL = 'register_completed'
 REQUEST = 'request_file'
 
 #LOGIN
 LOGIN = 'login'
-LOGIN_SUCCESSFUL = 'login_complete'
+LOGIN_SUCCESSFUL = 'login_completed'
 LOGIN_FAILED = 'login_error'
 LOGIN_WRONG_PASSWORD = 'invalid_password'
 LOGIN_ACC_NOT_EXIST = 'account_not_found'
