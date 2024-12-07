@@ -207,24 +207,24 @@ class Peer:
         try:
             print("An upload file request is sending...")
             
-            message = pickle.dumps({'type': UPLOAD_FILE, 'metainfo': metainfo, 'peer_id': self.peer_id})
-            self.peer_tracker_socket.sendall(struct.pack('>I', len(message)) + message)
+            msg = pickle.dumps({'type': UPLOAD_FILE, 'metainfo': metainfo, 'peer_id': self.peer_id})
+            self.peer_tracker_socket.sendall(struct.pack('>I', len(msg)) + msg)
             
             print("Request has been sent. Awaiting a response from the tracker...")
-            dataResponsive = receiveMess(self.peer_tracker_socket)
-            if dataResponsive is None:
+            rev_msg = receiveMess(self.peer_tracker_socket)
+            if rev_msg is None:
                 raise ConnectionError("Close the connection while data is being received")
-            print(f"Received {len(dataResponsive)} bytes of data")
-            response = pickle.loads(dataResponsive)
-            if response['type'] == UPLOAD_FILE_COMPLETE:
+            print(f"Received {len(rev_msg)} bytes of data")
+            result = pickle.loads(rev_msg)
+            if result['type'] == UPLOAD_FILE_COMPLETE:
                 print(f"File {file_path} uploaded completely")
-                magnet_link = response['magnet_link']
+                magnet_link = result['magnet_link']
                 print(f"Magnet link: {magnet_link}")
                 with open(os.path.join(f"repository_{self.user_name}", f"{metainfo['file_name']}_magnet"), 'wb') as f:
                     f.write(magnet_link.encode())
             else:
                 print(f"File {file_path} can not upload")
-                print(response['message'])
+                print(result['message'])
         except Exception as e:
             print(f"An issue occurred during upload file: {e}")
             
@@ -240,18 +240,18 @@ class Peer:
         if not self.peer_id:
             print("The peer has to log in first.")
             return
-        message = pickle.dumps({'type': LOGOUT, 'peer_id': self.peer_id})
-        self.peer_tracker_socket.sendall(struct.pack('>I', len(message)) + message)
+        msg  = pickle.dumps({'type': LOGOUT, 'peer_id': self.peer_id})
+        self.peer_tracker_socket.sendall(struct.pack('>I', len(msg )) + msg )
         print("A logout request has been sent. Awaiting a response from the tracker...")
-        dataResponsive = receiveMess(self.peer_tracker_socket)
-        if dataResponsive is None:
+        rev_msg = receiveMess(self.peer_tracker_socket)
+        if rev_msg is None:
             raise ConnectionError("Close the connection while data is being received")
-        response = pickle.loads(dataResponsive)
-        if response['type'] == LOGOUT_SUCCESSFUL:
+        result = pickle.loads(rev_msg)
+        if result['type'] == LOGOUT_SUCCESSFUL:
             print("Logout completely")
         else:
             print("Can not log out")
-            print(response['message'])
+            print(result['message'])
     
     # @listen_to_peers
     # Listens for incoming connections from peers
