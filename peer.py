@@ -4,6 +4,7 @@ import sqlite3
 import time
 import json #JavaScript Object Notation convert to jason type
 import os
+import sys
 import hashlib
 import maskpass #using for hide the password
 import pickle
@@ -114,7 +115,7 @@ class Peer:
     # Catches and handles any connection or unexpected errors during the login process
     def login(self):
         user_name = input("\nEnter your name: ")
-        password = enter_Pasword()
+        password = maskpass.askpass(prompt="Enter your password: ", mask="*")
         self.user_name = user_name
         msg = {'type': LOGIN, 'user_name': user_name, 'password': password, 'ip': self.ip, 'port': self.port}
         try:
@@ -136,7 +137,7 @@ class Peer:
                 print("Login successfully!")
                 return self.peer_id
             else:
-                print(f"User cant login {user_name}")
+                print(f"User cant login: {user_name}")
                 print(result['message'])
                 if result['type'] == LOGIN_WRONG_PASSWORD:
                     print("The password is incorrect")
@@ -189,6 +190,7 @@ class Peer:
     # Handles the process when a peer uploads a file to the tracker
     # First checks if the peer is logged in by verifying the `peer_id`
     # Prompts the user to input the file name they want to upload, including its extension
+    # Can upload multiple files (separate by commas)
     # Generates a torrent file (metainfo) for the selected file using `create_torrent`
     # Sends an upload file request to the tracker with the file's metainfo and peer ID
     # Waits for a response from the tracker
@@ -196,37 +198,49 @@ class Peer:
     # Saves the magnet link in the peer's local repository directory as a file
     # If the upload fails, prints an error message returned by the tracker
     # Handles any exceptions that may occur during the file upload process
-    def upload_file(self):
+    def upload_files(self):
         if self.peer_id is None:
-            print("The peer has to log in first.")
+            print("You must log in first.")
             return
+
+        file_paths = input("Enter the file names you want to upload (separate by commas): ").split(',')
+        file_paths = [file.strip() for file in file_paths] 
         
-        file_path = str(input("Type file name you want to upload(including format extension): "))
-        file_path = 'repository_' + self.user_name + '/' + file_path
-        metainfo = self.create_torrent(file_path)
-        try:
-            print("An upload file request is sending...")
+        for file_path in file_paths:
+            full_file_path = f'repository_{self.user_name}/{file_path}'
             
-            msg = pickle.dumps({'type': UPLOAD_FILE, 'metainfo': metainfo, 'peer_id': self.peer_id})
-            self.peer_tracker_socket.sendall(struct.pack('>I', len(msg)) + msg)
+            metainfo = self.create_torrent(full_file_path)
+            if not metainfo:
+                print(f"Skipping {file_path} as it doesn't exist.")
+                continue
             
-            print("Request has been sent. Awaiting a response from the tracker...")
-            rev_msg = receiveMess(self.peer_tracker_socket)
-            if rev_msg is None:
-                raise ConnectionError("Close the connection while data is being received")
-            print(f"Received {len(rev_msg)} bytes of data")
-            result = pickle.loads(rev_msg)
-            if result['type'] == UPLOAD_FILE_COMPLETE:
-                print(f"File {file_path} uploaded completely")
-                magnet_link = result['magnet_link']
-                print(f"Magnet link: {magnet_link}")
-                with open(os.path.join(f"repository_{self.user_name}", f"{metainfo['file_name']}_magnet"), 'wb') as f:
-                    f.write(magnet_link.encode())
-            else:
-                print(f"File {file_path} can not upload")
-                print(result['message'])
-        except Exception as e:
-            print(f"An issue occurred during upload file: {e}")
+            try:
+                print(f"Sending upload request for file: {file_path}...")
+                
+                # Gửi yêu cầu upload file lên tracker
+                message = pickle.dumps({'type': UPLOAD_FILE, 'metainfo': metainfo, 'peer_id': self.peer_id})
+                self.peer_tracker_socket.sendall(struct.pack('>I', len(message)) + message)
+                
+                # Nhận phản hồi từ tracker
+                print("Awaiting response from the tracker...")
+                dataResponsive = receiveMess(self.peer_tracker_socket)
+                if dataResponsive is None:
+                    raise ConnectionError("Connection was closed while receiving data.")
+                
+                response = pickle.loads(dataResponsive)
+                if response['type'] == UPLOAD_FILE_COMPLETE:
+                    print(f"File {file_path} uploaded successfully.")
+                    magnet_link = response['magnet_link']
+                    print(f"Magnet link: {magnet_link}")
+                    
+                    # Lưu magnet link vào thư mục repository
+                    with open(os.path.join(f"repository_{self.user_name}", f"{metainfo['file_name']}_magnet"), 'wb') as f:
+                        f.write(magnet_link.encode())
+                else:
+                    print(f"Failed to upload file {file_path}: {response['message']}")
+            
+            except Exception as e:
+                print(f"An error occurred while uploading {file_path}: {e}")
             
     # @logout
     # Handles the process when a peer logs out from the tracker
@@ -240,18 +254,18 @@ class Peer:
         if not self.peer_id:
             print("The peer has to log in first.")
             return
-        msg  = pickle.dumps({'type': LOGOUT, 'peer_id': self.peer_id})
-        self.peer_tracker_socket.sendall(struct.pack('>I', len(msg )) + msg )
+        message = pickle.dumps({'type': LOGOUT, 'peer_id': self.peer_id})
+        self.peer_tracker_socket.sendall(struct.pack('>I', len(message)) + message)
         print("A logout request has been sent. Awaiting a response from the tracker...")
-        rev_msg = receiveMess(self.peer_tracker_socket)
-        if rev_msg is None:
+        dataResponsive = receiveMess(self.peer_tracker_socket)
+        if dataResponsive is None:
             raise ConnectionError("Close the connection while data is being received")
-        result = pickle.loads(rev_msg)
-        if result['type'] == LOGOUT_SUCCESSFUL:
+        response = pickle.loads(dataResponsive)
+        if response['type'] == LOGOUT_SUCCESSFUL:
             print("Logout completely")
         else:
             print("Can not log out")
-            print(result['message'])
+            print(response['message'])
     
     # @listen_to_peers
     # Listens for incoming connections from peers
@@ -391,7 +405,7 @@ class Peer:
                 choice = input("\nPlease choose 1-3: ")
                 
                 if choice == '1':
-                    self.upload_file()
+                    self.upload_files()
                 elif choice == '2':
                     #self.download_file()
                     break
@@ -416,10 +430,10 @@ if __name__ == '__main__':
     try:
         peer = Peer(local_ip, peer_port)
         peer.tracker_connection()
-        print('\nChoose your Options:')
-        print('1. Signup')
-        print('2. Login')
         while True:
+            print('\nChoose your Options:')
+            print('1. Signup')
+            print('2. Login')
             choice = int(input('\nPlease choose 1-2: '))
             if choice == 1:
                 peer_id = peer.signup()
@@ -430,7 +444,9 @@ if __name__ == '__main__':
                 if peer_id:
                     print(f'The peer id is {peer_id}')
                     break
-                break
+                else:
+                    print("Login failed, exiting program...")
+                    sys.exit()    
             else:
                 print('Invalid choice')
         peer.peer_Controll()
