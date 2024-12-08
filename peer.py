@@ -4,14 +4,15 @@ import sqlite3
 import time
 import json #JavaScript Object Notation convert to jason type
 import os
+import sys
 import hashlib
 import maskpass #using for hide the password
 import pickle
+import random
 
 from command import *
 from torrent import *
 from support import *
-
 
 SERVER_NAME = socket.gethostname()
 SERVER_IP = socket.gethostbyname(SERVER_NAME)
@@ -19,24 +20,25 @@ PORT = 1606
 
 class Peer:
     # @__init__
-    # Constructor of Peer
-    # Create its self ip and port and the connect with other peers and tracker
+    # Creates a Peer instance with specified IP and port.
+    # Sets up sockets for tracker and peer communication.
+    # Initializes storage for files, file pieces, and magnet links.
     def __init__(self, ip, port):
         self.ip = ip
         self.port = port
-        self.peer_tracker_socket = None 
+        self.peer_tracker_socket = None
         self.peer_peers_socket = None
         
         self.user_name = None
         self.peer_id = None
-        
         self.files: Dict[str, metain4File] = {} # key: file name, value: metain4File
         self.pieces: Dict[str, Dict[int, bytes]] = {} # key: file name, value: dict of piece index and piece data
         self.magnet_links: Dict[str, str] = {} # key: file name, value: magnet link
-        
+    
     # @tracker_connection
-    # Give a chance to connect before its time out   
-    # IF timeout send exception 
+    # Connects the peer to the tracker server.
+    # Attempts connection up to 3 times with a 5-second delay between retries.
+    # Prints success or failure messages and raises an error if all attempts fail.
     def tracker_connection(self):
         attempts = 3
         for attempt in range(attempts):
@@ -52,8 +54,8 @@ class Peer:
                     time.sleep(5)
                 else:
                     print("Error connection to tracker after multiple tries.")
-                    raise    
-    
+                    raise  
+                    
     # @signup
     # Handles the process of signing up a new user
     # Prompts the user for their username and password
@@ -92,7 +94,7 @@ class Peer:
                 return peer_id
             else:
                 print(f"User: {user_name} cant register")
-                print(result['message'])
+                print(result['msg'])
                 return None
         except ConnectionResetError:
             print("Connection was reset and closed unexpectedly")
@@ -114,7 +116,7 @@ class Peer:
     # Catches and handles any connection or unexpected errors during the login process
     def login(self):
         user_name = input("\nEnter your name: ")
-        password = enter_Pasword()
+        password = maskpass.askpass(prompt="Enter your password: ", mask="*")
         self.user_name = user_name
         msg = {'type': LOGIN, 'user_name': user_name, 'password': password, 'ip': self.ip, 'port': self.port}
         try:
@@ -136,8 +138,8 @@ class Peer:
                 print("Login successfully!")
                 return self.peer_id
             else:
-                print(f"User cant login {user_name}")
-                print(result['message'])
+                print(f"User cant login: {user_name}")
+                print(result['msg'])
                 if result['type'] == LOGIN_WRONG_PASSWORD:
                     print("The password is incorrect")
                     print("Please try again.")
@@ -189,6 +191,7 @@ class Peer:
     # Handles the process when a peer uploads a file to the tracker
     # First checks if the peer is logged in by verifying the `peer_id`
     # Prompts the user to input the file name they want to upload, including its extension
+    # Can upload multiple files (separate by commas)
     # Generates a torrent file (metainfo) for the selected file using `create_torrent`
     # Sends an upload file request to the tracker with the file's metainfo and peer ID
     # Waits for a response from the tracker
@@ -196,38 +199,49 @@ class Peer:
     # Saves the magnet link in the peer's local repository directory as a file
     # If the upload fails, prints an error message returned by the tracker
     # Handles any exceptions that may occur during the file upload process
-    def upload_file(self):
+    def upload_files(self):
         if self.peer_id is None:
-            print("The peer has to log in first.")
+            print("You must log in first.")
             return
+
+        file_paths = input("Enter the file names you want to upload (separate by commas): ").split(',')
+        file_paths = [file.strip() for file in file_paths] 
         
-        file_path = str(input("Type file name you want to upload(including format extension): "))
-        file_path = 'repository_' + self.user_name + '/' + file_path
-        metainfo = self.create_torrent(file_path)
-        try:
-            print("An upload file request is sending...")
+        for file_path in file_paths:
+            full_file_path = f'repository_{self.user_name}/{file_path}'
             
-            message = pickle.dumps({'type': UPLOAD_FILE, 'metainfo': metainfo, 'peer_id': self.peer_id})
-            self.peer_tracker_socket.sendall(struct.pack('>I', len(message)) + message)
+            metainfo = self.create_torrent(full_file_path)
+            if not metainfo:
+                print(f"Skipping {file_path} as it doesn't exist.")
+                continue
             
-            print("Request has been sent. Awaiting a response from the tracker...")
-            dataResponsive = receiveMess(self.peer_tracker_socket)
-            if dataResponsive is None:
-                raise ConnectionError("Close the connection while data is being received")
-            print(f"Received {len(dataResponsive)} bytes of data")
-            response = pickle.loads(dataResponsive)
-            if response['type'] == UPLOAD_FILE_COMPLETE:
-                print(f"File {file_path} uploaded completely")
-                magnet_link = response['magnet_link']
-                print(f"Magnet link: {magnet_link}")
-                with open(os.path.join(f"repository_{self.user_name}", f"{metainfo['file_name']}_magnet"), 'wb') as f:
-                    f.write(magnet_link.encode())
-            else:
-                print(f"File {file_path} can not upload")
-                print(response['message'])
-        except Exception as e:
-            print(f"An issue occurred during upload file: {e}")
+            try:
+                print(f"Sending upload request for file: {file_path}...")
+                
+                msg = pickle.dumps({'type': UPLOAD_FILE, 'metainfo': metainfo, 'peer_id': self.peer_id})
+                self.peer_tracker_socket.sendall(struct.pack('>I', len(msg)) + msg)
+                
+                # Nhận phản hồi từ tracker
+                print("Awaiting response from the tracker...")
+                rev_msg = receiveMess(self.peer_tracker_socket)
+                if rev_msg is None:
+                    raise ConnectionError("Connection was closed while receiving data.")
+                
+                response = pickle.loads(rev_msg)
+                if response['type'] == UPLOAD_FILE_COMPLETE:
+                    print(f"File {file_path} uploaded successfully.")
+                    magnet_link = response['magnet_link']
+                    print(f"Magnet link: {magnet_link}")
+                    
+                    # Lưu magnet link vào thư mục repository
+                    with open(os.path.join(f"repository_{self.user_name}", f"{metainfo['file_name']}_magnet"), 'wb') as f:
+                        f.write(magnet_link.encode())
+                else:
+                    print(f"Failed to upload file {file_path}: {response['msg']}")
             
+            except Exception as e:
+                print(f"An error occurred while uploading {file_path}: {e}")
+        
     # @logout
     # Handles the process when a peer logs out from the tracker
     # First checks if the peer is logged in by verifying the `peer_id`
@@ -235,31 +249,31 @@ class Peer:
     # Waits for a response from the tracker
     # If the logout is successful, prints a confirmation message
     # If the logout fails, prints an error message returned by the tracker
-    # Handles any issues or errors that occur during the logout process
+    # Handles any issues or errors that occur during the logout process 
     def logout(self):
         if not self.peer_id:
             print("The peer has to log in first.")
             return
-        message = pickle.dumps({'type': LOGOUT, 'peer_id': self.peer_id})
-        self.peer_tracker_socket.sendall(struct.pack('>I', len(message)) + message)
+        msg = pickle.dumps({'type': LOGOUT, 'peer_id': self.peer_id})
+        self.peer_tracker_socket.sendall(struct.pack('>I', len(msg)) + msg)
         print("A logout request has been sent. Awaiting a response from the tracker...")
-        dataResponsive = receiveMess(self.peer_tracker_socket)
-        if dataResponsive is None:
+        rev_msg = receiveMess(self.peer_tracker_socket)
+        if rev_msg is None:
             raise ConnectionError("Close the connection while data is being received")
-        response = pickle.loads(dataResponsive)
-        if response['type'] == LOGOUT_SUCCESSFUL:
+        result = pickle.loads(rev_msg)
+        if result['type'] == LOGOUT_SUCCESSFUL:
             print("Logout completely")
         else:
             print("Can not log out")
-            print(response['message'])
-    
+            print(result['msg'])
+          
     # @listen_to_peers
     # Listens for incoming connections from peers
     # Continuously accepts new connections from peer peers through the server socket
     # For each new connection, a new thread is created to handle the peer's interaction
     # The `peers_connection` method is called in a separate thread to manage the communication with the connected peer
     # If the server socket is not initialized or an error occurs, the loop breaks or the error is handled
-    # In case of a socket closure error (OSError), the server socket is closed and the listening loop is stopped
+    # In case of a socket closure error (OSError), the server socket is closed and the listening loop is stopped  
     def listen_to_peers(self):
         while True:
             try:
@@ -278,6 +292,27 @@ class Peer:
                     break
                 print(f"Error accepting connection: {e}")
     
+    # @get_list_files_to_download
+    # Fetches the list of files available for download from the tracker server.
+    # Ensures the peer is logged in before sending the request.
+    # Sends a request message to the tracker and waits for a response.
+    # Parses and returns the list of files if available; otherwise, informs that no files are found.
+    # Raises an error if the connection is interrupted during data reception.
+    def get_list_files_to_download(self):
+        if not self.peer_id:
+            print("The peer has to log in first.")
+            return
+        msg = pickle.dumps({'type': GET_LIST_FILES_TO_DOWNLOAD})
+        self.peer_tracker_socket.sendall(struct.pack('>I', len(msg)) + msg)
+        rev_msg = receiveMess(self.peer_tracker_socket)
+        if rev_msg is None:
+            raise ConnectionError("Close the connection while data is being received")
+        result = pickle.loads(rev_msg)
+        if result['type'] == GET_LIST_FILES_TO_DOWNLOAD and result['files']:
+            return result['files']
+        else:
+            print("There are no files available")
+    
     # @peers_connection
     # Handles the communication with a connected peer
     # Listens for incoming messages from the peer and processes them based on the message type
@@ -295,7 +330,7 @@ class Peer:
                     break
                 print(f"Received {len(data)} bytes from {addr}")
                 info = pickle.loads(data)
-                print(f"Received message from {addr}: {info['type']}")
+                print(f"Received msg from {addr}: {info['type']}")
                 if info['type'] == VERIFY_MAGNET_LINK:
                     self.verify_magnet_link(peer_socket, info)
                 elif info['type'] == REQUEST_PIECE:
@@ -315,10 +350,282 @@ class Peer:
     def piece_respone(self, peer_socket, info):
         file_name = info['file_name']
         piece_index = info['piece_index']
-        file_path = f"repo_{self.user_name}/{file_name}"
+        file_path = f"repository_{self.user_name}/{file_name}"
         pieces = send_piece(file_path, PIECE_SIZE, piece_index)
         sendMess(peer_socket, {'type': SEND_PIECE, 'pieces': pieces})
         
+    # @request_piece
+    # Requests a specific piece of a file from another peer.
+    # Establishes a temporary socket connection to the peer at the specified IP and port.
+    # Sends a message containing the request type, file name, and piece index.
+    # Waits for a response and closes the connection after receiving it.
+    # Parses the response and returns the requested piece data.
+    # Raises an error if the connection is interrupted during data reception.
+    def request_piece(self, ip, port, info):
+        temp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        temp_socket.connect((ip, port))
+        msg = {'type': REQUEST_PIECE, 'file_name': info['file_name'], 'piece_index': info['piece_index']}
+        sendMess(temp_socket, msg)
+        rev_msg = receiveMess(temp_socket)
+        temp_socket.close()
+        if rev_msg is None:
+            raise ConnectionError("Close the connection while data is being received")
+        result = pickle.loads(rev_msg)
+        return result['pieces']
+    
+    # @download_file
+    # Allows the peer to download a file by interacting with the tracker and other peers.
+    # 1. Retrieves the list of files available for download from the tracker.
+    # 2. Checks for already downloaded files to avoid duplication.
+    # 3. Prompts the user to choose a file to download.
+    # 4. Requests the file's metadata and the list of peers holding the file from the tracker.
+    # 5. Verifies the magnet link with the listed peers to confirm file availability.
+    # 6. Distributes the file's pieces across peers for efficient downloading:
+    #    - Calculates the number of pieces each peer should provide.
+    #    - Requests specific pieces from each peer.
+    # 7. Collects and sorts the pieces received, then assembles them into the complete file.
+    # 8. Saves the assembled file in the peer's repository.
+    # Handles errors such as incomplete downloads, missing pieces, or magnet link verification failures.
+    # def download_file(self):
+    #     files = self.get_list_files_to_download()
+    #     if not files or (len(files) == 1 and os.path.exists(f"repository_{self.user_name}/{files[0]}")):
+    #         print('There are no files available')
+    #         return
+    #     else:
+    #         print('All available files:')
+    #         for file in files:
+    #             if not os.path.exists(f"repository_{self.user_name}/{file}"):
+    #                 print(file)
+                    
+    #     file_name = input("Type the file name that peer want to download: ")
+        
+    #     if file_name not in files:
+    #         print("Can not find the file")
+    #         return
+    #     if os.path.exists(f"repository_{self.user_name}/{file_name}"):
+    #         print("File has already existed")
+    #         return
+        
+    #     msg = pickle.dumps({'type': REQUEST_FILE, 'file_name': file_name})
+    #     self.peer_tracker_socket.sendall(struct.pack('>I', len(msg)) + msg)
+    #     rev_msg = receiveMess(self.peer_tracker_socket)
+    #     if rev_msg is None:
+    #         raise ConnectionError("Close the connection while data is being received")
+    #     result = pickle.loads(rev_msg)
+    #     if result['type'] == SHOW_PEER_HOLD_FILE:
+    #         print(result['metainfo'])
+    #         metainfo = result['metainfo']
+    #         ip_port_list = result['ip_port_list']
+    #         print(f'Found {len(ip_port_list)} peers')
+    #         verify_result = []
+    #         magnet_link = magnet_Link(metainfo, SERVER_IP, PORT)
+    #         for ip, port in ip_port_list:
+    #             res = self.send_confirm_magnet(magnet_link = magnet_link, ip = ip, port = port, file_name = file_name)
+    #             if res: verify_result.append((ip, port))
+            
+    #         print('List of peers that have the file:')
+    #         for ip, port in verify_result:
+    #             print(f'{ip}:{port}')
+                
+    #         if verify_result:
+    #             piece_per_peer = metainfo['pieces_count'] // len(verify_result)
+    #             remaining_pieces = metainfo['pieces_count'] % len(verify_result)
+                
+    #             num_of_peer_to_download = len(verify_result) 
+    #             file_name = metainfo['file_name']
+    #             peer_and_piece_index: Dict[Tuple[str, int], List[int]] = {}
+    #             for j in range(piece_per_peer):
+    #                 for i in range(num_of_peer_to_download):
+    #                     key = (verify_result[i][0], verify_result[i][1])
+    #                     if key not in peer_and_piece_index:
+    #                         peer_and_piece_index[key] = []
+    #                     peer_and_piece_index[key].append(j * num_of_peer_to_download + i)
+                
+    #             for i in range(remaining_pieces):
+    #                 peer_and_piece_index[(verify_result[i][0], verify_result[i][1])].append(piece_per_peer * num_of_peer_to_download + i)
+                
+    #             for ip, port in peer_and_piece_index:
+    #                 print(f'Address: {ip}:{port} need to provide these pieces: {peer_and_piece_index[(ip, port)]}')
+    #             piece_received = []
+    #             total_piece = 0
+    #             for ip, port in peer_and_piece_index:
+    #                 list_piece_index = peer_and_piece_index[(ip, port)]
+    #                 msg = {'file_name': file_name, 'piece_index': list_piece_index}
+    #                 result = self.request_piece(ip, port, msg)
+    #                 print(f"Received response: {result}")  # Kiểm tra phản hồi từ peer
+    #                 if result:  # Kiểm tra nếu có mảnh tệp
+    #                     print(f"Received {len(result)} pieces from {ip}:{port}")
+    #                     for i, piece in enumerate(result):
+    #                         piece_received.append({'piece_index': list_piece_index[i], 'piece': piece})
+    #                     total_piece += len(result)
+                
+    #                 if total_piece != metainfo['pieces_count']:
+    #                     print(f"Received {total_piece} pieces, but expected {metainfo['pieces_count']} pieces")
+    #                     return
+                    
+    #                 piece_received.sort(key = lambda x: x['piece_index'])
+    #                 with open(os.path.join(f"repository_{self.user_name}", file_name), 'wb') as f:
+    #                     for piece in piece_received:
+    #                         f.write(piece['piece'].get('piece'))
+    #                 print(f"Downloaded file {file_name} completely")
+    #         else:
+    #             print("Error in verifying magnet link for some peers")
+    #     elif result['type'] == SHOW_PEER_HOLD_FILE_FAILED:        
+    #         print(result['msg'])
+    #     else:
+    #         print("Internal server error")
+    def download_files(self):
+        files = self.get_list_files_to_download()
+        if not files:
+            print("There are no files available to download.")
+            return
+
+        print("All available files:")
+        available_files = []
+        for file in files:
+            if not os.path.exists(f"repository_{self.user_name}/{file}"):
+                print(file)
+                available_files.append(file)
+
+        if not available_files:
+            print("No new files to download.")
+            return
+
+        file_names = input("Type the file names to download (separate by commas): ").split(',')
+
+        files_to_download = [file for file in file_names if file in available_files]
+        if not files_to_download:
+            print("No valid files found in your input.")
+            return
+
+        print(f"Files to download: {', '.join(files_to_download)}")
+
+        for file_name in files_to_download:
+            print(f"Starting download for {file_name}...")
+            self.download_file_single(file_name)
+
+    def download_file_single(self, file_name):
+        start_time = time.time()
+        msg = pickle.dumps({'type': REQUEST_FILE, 'file_name': file_name})
+        self.peer_tracker_socket.sendall(struct.pack('>I', len(msg)) + msg)
+        rev_msg = receiveMess(self.peer_tracker_socket)
+        if rev_msg is None:
+            raise ConnectionError("Connection closed while receiving data from tracker.")
+        result = pickle.loads(rev_msg)
+        
+        if result['type'] == SHOW_PEER_HOLD_FILE:
+            print(f"Found file {file_name} on tracker.")
+            metainfo = result['metainfo']
+            ip_port_list = result['ip_port_list']
+            print(f'Found {len(ip_port_list)} peers for this file.')
+        
+            verify_result = []
+            magnet_link = magnet_Link(metainfo, SERVER_IP, PORT)
+            for ip, port in ip_port_list:
+                res = self.send_confirm_magnet(magnet_link=magnet_link, ip=ip, port=port, file_name=file_name)
+                if res:
+                    verify_result.append((ip, port))
+            
+            if verify_result:
+                print(f"Peers that have the file: {', '.join([f'{ip}:{port}' for ip, port in verify_result])}")
+                
+                chosen_peer = random.choice(verify_result) 
+                print(f"Chosen peer for download: {chosen_peer[0]}:{chosen_peer[1]}")
+                
+                # Phân bổ các mảnh tệp cho peer đã chọn
+                # Phân bổ các mảnh tệp cho peer đã chọn
+                piece_per_peer = metainfo['pieces_count'] // len(verify_result)
+                remaining_pieces = metainfo['pieces_count'] % len(verify_result)
+
+                # Lưu các mảnh tệp cho mỗi peer
+                peer_and_piece_index: Dict[Tuple[str, int], List[int]] = {}
+
+                # Phân bổ các mảnh tệp cho peer đã chọn
+                for j in range(piece_per_peer):
+                    key = (chosen_peer[0], chosen_peer[1])
+                    if key not in peer_and_piece_index:
+                        peer_and_piece_index[key] = []
+                    peer_and_piece_index[key].append(j)
+
+                # Đảm bảo thêm mảnh tệp còn lại nếu có
+                for i in range(remaining_pieces):
+                    key = (chosen_peer[0], chosen_peer[1])
+                    if key not in peer_and_piece_index:
+                        peer_and_piece_index[key] = []
+                    peer_and_piece_index[key].append(piece_per_peer + i)
+
+                # Hiển thị thông tin về các mảnh tệp mà peer cần cung cấp
+                for ip, port in peer_and_piece_index:
+                    print(f"Peer {ip}:{port} will provide pieces: {peer_and_piece_index[(ip, port)]}")
+
+
+                # Tải các mảnh tệp từ peer đã chọn
+                piece_received = []
+                total_piece = 0
+                for ip, port in peer_and_piece_index:
+                    list_piece_index = peer_and_piece_index[(ip, port)]
+                    msg = {'file_name': file_name, 'piece_index': list_piece_index}
+                    result = self.request_piece(ip, port, msg)
+                    #print(f"Received response: {result}")
+                    
+                    if result:  # Kiểm tra nếu có mảnh tệp
+                        print(f"Received {len(result)} pieces from {ip}:{port}")
+                        for i, piece in enumerate(result):
+                            piece_received.append({'piece_index': list_piece_index[i], 'piece': piece})
+                        total_piece += len(result)
+                
+                if total_piece != metainfo['pieces_count']:
+                    print(f"Received {total_piece} pieces, but expected {metainfo['pieces_count']} pieces")
+                    return
+                
+                piece_received.sort(key=lambda x: x['piece_index'])
+                with open(os.path.join(f"repository_{self.user_name}", file_name), 'wb') as f:
+                    for piece in piece_received:
+                        f.write(piece['piece'].get('piece'))
+                
+                end_time = time.time()
+                print(f"Downloaded file {file_name} completely.")
+                
+                download_time = end_time - start_time
+                print(f"Downloaded file {file_name} completely in {download_time:.2f} seconds.")
+            else:
+                print("No peers found with the file.")
+        
+        elif result['type'] == SHOW_PEER_HOLD_FILE_FAILED:
+            print(result['msg'])
+        
+        else:
+            print("Error with the tracker server.")
+
+
+
+    # @send_confirm_magnet
+    # Sends a request to verify the magnet link with a specific peer.
+    # 1. Establishes a temporary TCP connection to the peer using the given IP and port.
+    # 2. Sends a message containing the magnet link and file name for verification.
+    # 3. Waits for a response from the peer:
+    #    - If successful, returns `True`.
+    #    - If an error occurs or verification fails, returns `False`.
+    # 4. Handles exceptions such as connection issues or data errors.
+    # 5. Ensures the socket is closed after the operation, regardless of success or failure.
+    def send_confirm_magnet(self, magnet_link, ip, port, file_name):
+        temp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            temp_socket.connect((ip, port))
+            msg = {'type': VERIFY_MAGNET_LINK, 'magnet_link': magnet_link, 'file_name': file_name}
+            sendMess(temp_socket, msg)
+            rev_msg = receiveMess(temp_socket)
+            if rev_msg is None:
+                raise ConnectionError("Close the connection while data is being received")
+                
+            result = pickle.loads(rev_msg)
+            return result['type'] == VERIFY_MAGNET_LINK_SUCCESSFUL
+        except Exception as e:
+            print(f"Error verifying magnet link with peer {ip}:{port}: {e}")
+            return False
+        finally:
+            temp_socket.close() 
+
     # @verify_magnet_link
     # Handles the verification of a magnet link from a peer
     # Compares the received magnet link with the stored magnet link for the requested file
@@ -326,7 +633,6 @@ class Peer:
     # If an error occurs, sends an error response with the exception message
     def verify_magnet_link(self, peer_socket, info):
         try:
-            # Nhận verification request
             magnet_link = info['magnet_link']
             file_name = info['file_name']
             print(f'Received the magnet link from {magnet_link}')
@@ -338,15 +644,15 @@ class Peer:
             
             if magnet_link == magnet_link_to_verify:
                 print(f"Confirmed the magnet link for {file_name}")
-                response = {'type': VERIFY_MAGNET_LINK_SUCCESSFUL}
+                result = {'type': VERIFY_MAGNET_LINK_SUCCESSFUL}
             else:
                 print(f"There is an error in confirming magnet link for {file_name}")
-                response = {'type': VERIFY_MAGNET_LINK_FAILED}
+                result = {'type': VERIFY_MAGNET_LINK_FAILED}
         
-            sendMess(peer_socket, response)
+            sendMess(peer_socket, result)
         except Exception as e:
             print(f"Error handling magnet link verification: {e}")
-            error_response = pickle.dumps({'type': 'ERROR', 'message': str(e)})
+            error_response = pickle.dumps({'type': 'ERROR', 'msg': str(e)})
             sendMess(peer_socket, error_response)
     
     # @tracker_socket
@@ -365,7 +671,7 @@ class Peer:
     
     # @clean_up
     # Cleans up by closing the server and peer connection sockets
-    # Ensures proper closure of sockets, handling any potential errors during the cleanup process
+    # Ensures proper closure of sockets, handling any potential errors during the cleanup process  
     def clean_up(self):
         try:
             if self.peer_peers_socket:
@@ -391,10 +697,9 @@ class Peer:
                 choice = input("\nPlease choose 1-3: ")
                 
                 if choice == '1':
-                    self.upload_file()
+                    self.upload_files()
                 elif choice == '2':
-                    #self.download_file()
-                    break
+                    self.download_files()
                 elif choice == '3':
                     self.logout()
                     self.clean_up()
@@ -405,8 +710,8 @@ class Peer:
         except Exception as e:
             print(f"An error occurred: {e}")
             traceback.print_exc()
-            
-            
+    
+    
 if __name__ == '__main__':
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)
@@ -416,10 +721,10 @@ if __name__ == '__main__':
     try:
         peer = Peer(local_ip, peer_port)
         peer.tracker_connection()
-        print('\nChoose your Options:')
-        print('1. Signup')
-        print('2. Login')
         while True:
+            print('\nChoose your Options:')
+            print('1. Signup')
+            print('2. Login')
             choice = int(input('\nPlease choose 1-2: '))
             if choice == 1:
                 peer_id = peer.signup()
@@ -430,7 +735,9 @@ if __name__ == '__main__':
                 if peer_id:
                     print(f'The peer id is {peer_id}')
                     break
-                break
+                else:
+                    print("Login failed, exiting program...")
+                    sys.exit()    
             else:
                 print('Invalid choice')
         peer.peer_Controll()
