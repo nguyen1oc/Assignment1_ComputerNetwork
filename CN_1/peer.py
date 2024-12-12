@@ -9,13 +9,15 @@ import hashlib
 import maskpass #using for hide the password
 import pickle
 import random
+from tracker import listen_for_discovery
 
 from command import *
 from torrent import *
 from support import *
 
+
 SERVER_NAME = socket.gethostname()
-SERVER_IP = socket.gethostbyname(SERVER_NAME)
+SERVER_IP = "10.127.3.77"
 PORT = 1606
 
 class Peer:
@@ -44,6 +46,7 @@ class Peer:
         for attempt in range(attempts):
             try:
                 self.peer_tracker_socket= socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                
                 self.peer_tracker_socket.connect((SERVER_IP, PORT))
                 print(f"The peer has been connected to tracker server at {SERVER_IP}:{PORT}")
                 return
@@ -428,45 +431,34 @@ class Peer:
             
             if verify_result:
                 print(f"Peers that have the file: {', '.join([f'{ip}:{port}' for ip, port in verify_result])}")
-                
-                chosen_peer = random.choice(verify_result) 
-                print(f"Chosen peer for download: {chosen_peer[0]}:{chosen_peer[1]}")
-                
-                # Phân bổ các mảnh tệp cho peer đã chọn
-                # Phân bổ các mảnh tệp cho peer đã chọn
+
+                # Phân bổ mảnh tệp cho từng peer
                 piece_per_peer = metainfo['pieces_count'] // len(verify_result)
                 remaining_pieces = metainfo['pieces_count'] % len(verify_result)
 
-                # Lưu các mảnh tệp cho mỗi peer
                 peer_and_piece_index: Dict[Tuple[str, int], List[int]] = {}
 
-                # Phân bổ các mảnh tệp cho peer đã chọn
-                for j in range(piece_per_peer):
-                    key = (chosen_peer[0], chosen_peer[1])
-                    if key not in peer_and_piece_index:
-                        peer_and_piece_index[key] = []
-                    peer_and_piece_index[key].append(j)
+                # Phân phối mảnh tệp chính
+                for i, (ip, port) in enumerate(verify_result):
+                    start_index = i * piece_per_peer
+                    end_index = start_index + piece_per_peer
+                    peer_and_piece_index[(ip, port)] = list(range(start_index, end_index))
 
-                # Đảm bảo thêm mảnh tệp còn lại nếu có
+                # Phân phối mảnh tệp còn lại
                 for i in range(remaining_pieces):
-                    key = (chosen_peer[0], chosen_peer[1])
-                    if key not in peer_and_piece_index:
-                        peer_and_piece_index[key] = []
-                    peer_and_piece_index[key].append(piece_per_peer + i)
+                    peer_and_piece_index[(verify_result[i][0], verify_result[i][1])].append(piece_per_peer * len(verify_result) + i)
 
                 # Hiển thị thông tin về các mảnh tệp mà peer cần cung cấp
                 for ip, port in peer_and_piece_index:
                     print(f"Peer {ip}:{port} will provide pieces: {peer_and_piece_index[(ip, port)]}")
 
-
-                # Tải các mảnh tệp từ peer đã chọn
+                # Tải các mảnh tệp từ từng peer
                 piece_received = []
                 total_piece = 0
                 for ip, port in peer_and_piece_index:
                     list_piece_index = peer_and_piece_index[(ip, port)]
                     msg = {'file_name': file_name, 'piece_index': list_piece_index}
                     result = self.request_piece(ip, port, msg)
-                    #print(f"Received response: {result}")
                     
                     if result:  # Kiểm tra nếu có mảnh tệp
                         print(f"Received {len(result)} pieces from {ip}:{port}")
@@ -485,17 +477,11 @@ class Peer:
                 
                 end_time = time.time()
                 print(f"Downloaded file {file_name} completely.")
-                
                 download_time = end_time - start_time
                 print(f"Downloaded file {file_name} completely in {download_time:.2f} seconds.")
             else:
-                print("No peers found with the file.")
-        
-        elif result['type'] == SHOW_PEER_HOLD_FILE_FAILED:
-            print(result['msg'])
-        
-        else:
-            print("Error with the tracker server.")
+                print("No peers found")
+
 
 
 
